@@ -84,6 +84,7 @@ def ensure_ambient_bgm():
     return bgm_path
 
 @app.get("/")
+@app.get("/api/health")
 def health_check():
     return {
         "status": "healthy",
@@ -145,9 +146,9 @@ async def run_render_pipeline(job_id: str, topic: str, hook: str):
     ass_path = os.path.join(STATIC_DIR, f"subs_{job_id}.ass")
     stock_clip_path = os.path.join(STATIC_DIR, f"stock_{job_id}.mp4")
     image_fallback_path = os.path.join(STATIC_DIR, "background_dynamic.jpg")
-    bgm_path = ensure_ambient_bgm()
 
     try:
+        bgm_path = ensure_ambient_bgm()
         # Step 1: Visual Acquisition
         JOBS_DB[job_id]["status"] = "generating_visuals"
         JOBS_DB[job_id]["progress"] = 25
@@ -191,7 +192,7 @@ async def run_render_pipeline(job_id: str, topic: str, hook: str):
 
         JOBS_DB[job_id]["status"] = "ready"
         JOBS_DB[job_id]["progress"] = 100
-        JOBS_DB[job_id]["video_url"] = f"[http://127.0.0.1:8000/static/video](http://127.0.0.1:8000/static/video)_{job_id}.mp4"
+        JOBS_DB[job_id]["video_url"] = f"http://127.0.0.1:8000/static/video_{job_id}.mp4"
         JOBS_DB[job_id]["message"] = "Render completed with Whisper kinetic subtitles, BGM, and AI label."
     except Exception as e:
         JOBS_DB[job_id]["status"] = "failed"
