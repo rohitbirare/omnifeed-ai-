@@ -26,6 +26,7 @@ from schemas import (
 from video_engine import (
     generate_voiceover,
     fetch_stock_video_clip,
+    generate_kinetic_ass_subtitles,
     render_vertical_video_with_audio
 )
 
@@ -71,13 +72,12 @@ if GEMINI_API_KEY and GEMINI_API_KEY != "your_gemini_api_key_here":
 JOBS_DB: Dict[str, dict] = {}
 
 def ensure_ambient_bgm():
-    """सिंथेटिक अँबियंट BGM ट्रॅक तयार करतो."""
     bgm_path = os.path.join(STATIC_DIR, "ambient_bgm.mp3")
     if not os.path.exists(bgm_path):
         subprocess.run([
             "ffmpeg", "-y", "-f", "lavfi",
             "-i", "sine=frequency=220:duration=30",
-            "-af", "lowpass=f=400,volume=0.4",
+            "-af", "lowpass=f=400,volume=0.35",
             "-c:a", "libmp3lame",
             bgm_path
         ], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -142,12 +142,13 @@ async def generate_script(req: ScriptRequest):
 async def run_render_pipeline(job_id: str, topic: str, hook: str):
     audio_path = os.path.join(STATIC_DIR, f"audio_{job_id}.mp3")
     video_path = os.path.join(STATIC_DIR, f"video_{job_id}.mp4")
+    ass_path = os.path.join(STATIC_DIR, f"subs_{job_id}.ass")
     stock_clip_path = os.path.join(STATIC_DIR, f"stock_{job_id}.mp4")
     image_fallback_path = os.path.join(STATIC_DIR, "background_dynamic.jpg")
     bgm_path = ensure_ambient_bgm()
 
     try:
-        # Step 1: Visual Asset Acquisition (Pexels / Procedural Fallback)
+        # Step 1: Visual Acquisition
         JOBS_DB[job_id]["status"] = "generating_visuals"
         JOBS_DB[job_id]["progress"] = 25
         
@@ -161,27 +162,37 @@ async def run_render_pipeline(job_id: str, topic: str, hook: str):
                 "-vframes", "1", image_fallback_path
             ], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
-        # Step 2: Voice Narration
+        # Step 2: Voiceover Generation
         JOBS_DB[job_id]["status"] = "generating_voice"
         JOBS_DB[job_id]["progress"] = 50
         await generate_voiceover(hook, audio_path)
 
-        # Step 3: FFmpeg Multi-Stream Render with BGM & Ducking
+        # Step 3: Whisper Word-level Kinetic Subtitle Generation
+        JOBS_DB[job_id]["status"] = "transcribing_captions"
+        JOBS_DB[job_id]["progress"] = 70
+        try:
+            generate_kinetic_ass_subtitles(audio_path, ass_path)
+        except Exception as wex:
+            print(f"Whisper fallback active: {wex}")
+            ass_path = None
+
+        # Step 4: Headless Render
         JOBS_DB[job_id]["status"] = "rendering_video"
-        JOBS_DB[job_id]["progress"] = 80
+        JOBS_DB[job_id]["progress"] = 85
         render_vertical_video_with_audio(
             visual_source=visual_source,
             voice_path=audio_path,
             bgm_path=bgm_path,
             output_path=video_path,
             caption_text=hook,
-            is_video=has_stock_clip
+            is_video=has_stock_clip,
+            ass_path=ass_path
         )
 
         JOBS_DB[job_id]["status"] = "ready"
         JOBS_DB[job_id]["progress"] = 100
-        JOBS_DB[job_id]["video_url"] = f"http://127.0.0.1:8000/static/video_{job_id}.mp4"
-        JOBS_DB[job_id]["message"] = "Render completed with BGM ducking and AI safety label."
+        JOBS_DB[job_id]["video_url"] = f"[http://127.0.0.1:8000/static/video](http://127.0.0.1:8000/static/video)_{job_id}.mp4"
+        JOBS_DB[job_id]["message"] = "Render completed with Whisper kinetic subtitles, BGM, and AI label."
     except Exception as e:
         JOBS_DB[job_id]["status"] = "failed"
         JOBS_DB[job_id]["message"] = str(e)
@@ -194,7 +205,7 @@ async def trigger_generation(req: GenerateRequest, background_tasks: BackgroundT
         "status": "queued",
         "progress": 5,
         "video_url": None,
-        "message": "Queued for headless kinetic render with BGM"
+        "message": "Queued for headless kinetic render with Whisper subtitles"
     }
     background_tasks.add_task(run_render_pipeline, job_id, req.topic, req.hook)
     return GenerateJobResponse(**JOBS_DB[job_id])
@@ -207,7 +218,6 @@ async def get_job_status(job_id: str):
 
 @app.post("/api/publish", response_model=PublishResponse)
 async def publish_video(req: PublishRequest):
-    """Qoneqt / Social Media Direct Publishing Gateway."""
     post_id = f"post_{uuid.uuid4().hex[:10]}"
     return PublishResponse(
         status="published",
