@@ -1,0 +1,11 @@
+﻿venv/
+.venv/
+**/__pycache__/
+*.pyc
+.env
+backend/.env
+backend/static/*.mp3
+backend/static/*.mp4
+backend/static/background.jpg
+frontend/node_modules/
+frontend/dist/
