@@ -1,5 +1,5 @@
-﻿from pydantic import BaseModel
-from typing import List
+﻿from typing import List, Optional
+from pydantic import BaseModel
 
 class TopicRequest(BaseModel):
     community: str
@@ -15,16 +15,16 @@ class HookResponse(BaseModel):
     topic: str
     hooks: List[HookItem]
 
+class ScriptRequest(BaseModel):
+    community: str
+    topic: str
+    selected_hook: str
+
 class Scene(BaseModel):
     scene: int
     duration: int
     visual: str
     voice: str
-
-class ScriptRequest(BaseModel):
-    community: str
-    topic: str
-    selected_hook: str
 
 class ScriptResponse(BaseModel):
     title: str
@@ -39,4 +39,6 @@ class GenerateRequest(BaseModel):
 class GenerateJobResponse(BaseModel):
     job_id: str
     status: str
-    video_url: str
+    video_url: Optional[str] = None
+    progress: Optional[int] = 0
+    message: Optional[str] = None
