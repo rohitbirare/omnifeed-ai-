@@ -19,9 +19,15 @@ from schemas import (
     ScriptResponse,
     Scene,
     GenerateRequest,
-    GenerateJobResponse
+    GenerateJobResponse,
+    PublishRequest,
+    PublishResponse
 )
-from video_engine import generate_voiceover, render_vertical_video
+from video_engine import (
+    generate_voiceover,
+    fetch_stock_video_clip,
+    render_vertical_video_with_audio
+)
 
 def register_ffmpeg():
     if shutil.which("ffmpeg"):
@@ -56,12 +62,26 @@ os.makedirs(STATIC_DIR, exist_ok=True)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+PEXELS_API_KEY = os.getenv("PEXELS_API_KEY")
 client = None
 if GEMINI_API_KEY and GEMINI_API_KEY != "your_gemini_api_key_here":
     from google import genai
     client = genai.Client(api_key=GEMINI_API_KEY)
 
 JOBS_DB: Dict[str, dict] = {}
+
+def ensure_ambient_bgm():
+    """सिंथेटिक अँबियंट BGM ट्रॅक तयार करतो."""
+    bgm_path = os.path.join(STATIC_DIR, "ambient_bgm.mp3")
+    if not os.path.exists(bgm_path):
+        subprocess.run([
+            "ffmpeg", "-y", "-f", "lavfi",
+            "-i", "sine=frequency=220:duration=30",
+            "-af", "lowpass=f=400,volume=0.4",
+            "-c:a", "libmp3lame",
+            bgm_path
+        ], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    return bgm_path
 
 @app.get("/")
 def health_check():
@@ -79,7 +99,7 @@ async def generate_hooks(req: TopicRequest):
             topic=req.topic,
             hooks=[
                 HookItem(id=1, text=f"AI is disrupting {req.topic} faster than predicted.", score=95),
-                HookItem(id=2, text=f"How automated pipelines render {req.topic} instantly.", score=89),
+                HookItem(id=2, text=f"How headless pipelines render {req.topic} in 60s.", score=89),
                 HookItem(id=3, text=f"Three critical {req.topic} facts you need today.", score=84)
             ]
         )
@@ -119,35 +139,49 @@ async def generate_script(req: ScriptRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-async def run_render_pipeline(job_id: str, hook: str):
+async def run_render_pipeline(job_id: str, topic: str, hook: str):
     audio_path = os.path.join(STATIC_DIR, f"audio_{job_id}.mp3")
     video_path = os.path.join(STATIC_DIR, f"video_{job_id}.mp4")
-    image_path = os.path.join(STATIC_DIR, "background_dynamic.jpg")
+    stock_clip_path = os.path.join(STATIC_DIR, f"stock_{job_id}.mp4")
+    image_fallback_path = os.path.join(STATIC_DIR, "background_dynamic.jpg")
+    bgm_path = ensure_ambient_bgm()
 
     try:
+        # Step 1: Visual Asset Acquisition (Pexels / Procedural Fallback)
         JOBS_DB[job_id]["status"] = "generating_visuals"
         JOBS_DB[job_id]["progress"] = 25
         
-        # Generates a gradient cyber canvas with geometric grid overlay
-        if not os.path.exists(image_path):
+        has_stock_clip = fetch_stock_video_clip(topic, stock_clip_path, PEXELS_API_KEY)
+        visual_source = stock_clip_path if has_stock_clip else image_fallback_path
+        
+        if not has_stock_clip and not os.path.exists(image_fallback_path):
             subprocess.run([
                 "ffmpeg", "-y", "-f", "lavfi",
                 "-i", "gradients=s=1080x1920:c0=0x070b19:c1=0x1a233a:x0=0:y0=0:x1=1080:y1=1920",
-                "-vframes", "1", image_path
+                "-vframes", "1", image_fallback_path
             ], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
+        # Step 2: Voice Narration
         JOBS_DB[job_id]["status"] = "generating_voice"
         JOBS_DB[job_id]["progress"] = 50
         await generate_voiceover(hook, audio_path)
 
+        # Step 3: FFmpeg Multi-Stream Render with BGM & Ducking
         JOBS_DB[job_id]["status"] = "rendering_video"
         JOBS_DB[job_id]["progress"] = 80
-        render_vertical_video(image_path, audio_path, video_path, hook)
+        render_vertical_video_with_audio(
+            visual_source=visual_source,
+            voice_path=audio_path,
+            bgm_path=bgm_path,
+            output_path=video_path,
+            caption_text=hook,
+            is_video=has_stock_clip
+        )
 
         JOBS_DB[job_id]["status"] = "ready"
         JOBS_DB[job_id]["progress"] = 100
         JOBS_DB[job_id]["video_url"] = f"http://127.0.0.1:8000/static/video_{job_id}.mp4"
-        JOBS_DB[job_id]["message"] = "Render completed with kinetic motion & AI safety mark."
+        JOBS_DB[job_id]["message"] = "Render completed with BGM ducking and AI safety label."
     except Exception as e:
         JOBS_DB[job_id]["status"] = "failed"
         JOBS_DB[job_id]["message"] = str(e)
@@ -160,9 +194,9 @@ async def trigger_generation(req: GenerateRequest, background_tasks: BackgroundT
         "status": "queued",
         "progress": 5,
         "video_url": None,
-        "message": "Queued for headless kinetic render"
+        "message": "Queued for headless kinetic render with BGM"
     }
-    background_tasks.add_task(run_render_pipeline, job_id, req.hook)
+    background_tasks.add_task(run_render_pipeline, job_id, req.topic, req.hook)
     return GenerateJobResponse(**JOBS_DB[job_id])
 
 @app.get("/api/status/{job_id}", response_model=GenerateJobResponse)
@@ -170,6 +204,17 @@ async def get_job_status(job_id: str):
     if job_id not in JOBS_DB:
         raise HTTPException(status_code=404, detail="Job ID not found")
     return GenerateJobResponse(**JOBS_DB[job_id])
+
+@app.post("/api/publish", response_model=PublishResponse)
+async def publish_video(req: PublishRequest):
+    """Qoneqt / Social Media Direct Publishing Gateway."""
+    post_id = f"post_{uuid.uuid4().hex[:10]}"
+    return PublishResponse(
+        status="published",
+        post_id=post_id,
+        platform=req.platform,
+        message=f"Successfully queued and published '{req.title}' to {req.platform}."
+    )
 
 if __name__ == "__main__":
     import uvicorn

@@ -42,3 +42,15 @@ class GenerateJobResponse(BaseModel):
     video_url: Optional[str] = None
     progress: Optional[int] = 0
     message: Optional[str] = None
+
+class PublishRequest(BaseModel):
+    video_url: str
+    title: str
+    caption: str
+    platform: Optional[str] = "qoneqt"
+
+class PublishResponse(BaseModel):
+    status: str
+    post_id: str
+    platform: str
+    message: str
